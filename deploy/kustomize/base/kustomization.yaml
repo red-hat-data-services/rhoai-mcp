@@ -16,6 +16,10 @@ resources:
 # Kustomize's namespace transformer does not update subjects[].namespace, so we use
 # a replacement sourced from the ServiceAccount's metadata.namespace (which IS set
 # by the namespace transformer).
+#
+# NOTE: If a downstream overlay overrides the namespace, it must also include this
+# same replacements block in its own kustomization.yaml — base-level replacements
+# run before the overlay's namespace transformer.
 replacements:
   - source:
       kind: ServiceAccount

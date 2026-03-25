@@ -1,0 +1,39 @@
+# NetworkPolicy: Allow rhoai-mcp to reach model-catalog service
+# Applied in the registries namespace (where the target pods live).
+#
+# Apply separately: oc apply -f deploy/kustomize/overlays/openshift/networkpolicy.yaml
+#
+# NOTE: The namespace below defaults to "rhoai-model-registries". If your
+# cluster uses a custom registries namespace, update metadata.namespace to match.
+# If you changed the app namespace, also update the namespaceSelector label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-rhoai-mcp-to-model-catalog
+  namespace: rhoai-model-registries
+  labels:
+    app.kubernetes.io/name: rhoai-mcp
+    app.kubernetes.io/component: networkpolicy
+spec:
+  podSelector:
+    matchLabels:
+      app: model-catalog
+      app.kubernetes.io/name: model-catalog
+      component: model-catalog
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: rhoai-mcp
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: rhoai-mcp
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 8443
+          protocol: TCP
+        - port: 443
+          protocol: TCP

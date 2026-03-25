@@ -1,0 +1,36 @@
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["datasciencecluster.opendatahub.io"]
+    resources: ["datascienceclusters"]
+    verbs: ["get", "list", "watch"]
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["components.platform.opendatahub.io"]
+    resources: ["modelregistries"]
+    verbs: ["get", "list", "watch"]
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["template.openshift.io"]
+    resources: ["templates"]
+    verbs: ["get", "list", "watch"]
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["route.openshift.io"]
+    resources: ["routes"]
+    verbs: ["get", "list", "watch"]
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["project.openshift.io"]
+    resources: ["projects"]
+    verbs: ["get", "list", "watch", "patch"]
+- op: add
+  path: /rules/-
+  value:
+    apiGroups: ["image.openshift.io"]
+    resources: ["imagestreams"]
+    verbs: ["list"]
