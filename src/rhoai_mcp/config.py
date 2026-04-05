@@ -254,6 +254,11 @@ class RHOAIConfig(BaseSettings):
         default=None,
         description="OCP API server URL for Protected Resource Metadata in token-review mode",
     )
+    oidc_resource_url: str | None = Field(
+        default=None,
+        description="External URL of this MCP server for Protected Resource Metadata "
+        "(e.g. the OpenShift Route URL). Defaults to https://{host}:{port}.",
+    )
 
     @field_validator("enabled_plugins", mode="before")
     @classmethod

@@ -13,9 +13,10 @@ def _make_token_review_response(
     authenticated: bool,
     username: str | None = None,
     uid: str | None = None,
+    groups: list[str] | None = None,
 ) -> SimpleNamespace:
     """Build a mock TokenReview response."""
-    user = SimpleNamespace(username=username, uid=uid, groups=None, extra=None)
+    user = SimpleNamespace(username=username, uid=uid, groups=groups, extra=None)
     status = SimpleNamespace(authenticated=authenticated, user=user, error=None)
     return SimpleNamespace(status=status)
 
@@ -32,9 +33,12 @@ class TestTokenReviewValidator:
         return TokenReviewValidator(mock_api_client)
 
     async def test_validate_token_happy_path(self, validator: TokenReviewValidator) -> None:
-        """Authenticated token with groups returns full ValidatedIdentity."""
+        """Authenticated token merges TokenReview and OCP User groups."""
         review_resp = _make_token_review_response(
-            authenticated=True, username="alice", uid="uid-123"
+            authenticated=True,
+            username="alice",
+            uid="uid-123",
+            groups=["system:authenticated", "system:authenticated:oauth"],
         )
 
         with (
@@ -50,7 +54,12 @@ class TestTokenReviewValidator:
         assert isinstance(identity, ValidatedIdentity)
         assert identity.username == "alice"
         assert identity.uid == "uid-123"
-        assert identity.groups == ["team-a", "team-b"]
+        assert identity.groups == [
+            "system:authenticated",
+            "system:authenticated:oauth",
+            "team-a",
+            "team-b",
+        ]
 
     async def test_validate_token_unauthenticated_raises(
         self, validator: TokenReviewValidator
@@ -88,11 +97,16 @@ class TestTokenReviewValidator:
         ):
             await validator.validate_token("empty-user-token")
 
-    async def test_validate_token_groups_lookup_failure_returns_empty(
+    async def test_validate_token_groups_lookup_failure_keeps_token_groups(
         self, validator: TokenReviewValidator, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """Groups lookup failure falls back to empty groups with warning."""
-        review_resp = _make_token_review_response(authenticated=True, username="bob", uid="uid-bob")
+        """OCP groups lookup failure still returns TokenReview groups."""
+        review_resp = _make_token_review_response(
+            authenticated=True,
+            username="bob",
+            uid="uid-bob",
+            groups=["system:authenticated"],
+        )
 
         with (
             patch.object(validator._authn_api, "create_token_review", return_value=review_resp),
@@ -105,7 +119,7 @@ class TestTokenReviewValidator:
             identity = await validator.validate_token("bobs-token")
 
         assert identity.username == "bob"
-        assert identity.groups == []
+        assert identity.groups == ["system:authenticated"]
         assert "Failed to fetch OCP groups" in caplog.text
 
     async def test_validate_token_api_error_propagates(
@@ -122,12 +136,15 @@ class TestTokenReviewValidator:
         ):
             await validator.validate_token("some-token")
 
-    async def test_validate_token_non_list_groups_returns_empty(
+    async def test_validate_token_non_list_groups_keeps_token_groups(
         self, validator: TokenReviewValidator
     ) -> None:
-        """Non-list groups value in OCP User response returns empty groups."""
+        """Non-list OCP User groups still returns TokenReview groups."""
         review_resp = _make_token_review_response(
-            authenticated=True, username="carol", uid="uid-carol"
+            authenticated=True,
+            username="carol",
+            uid="uid-carol",
+            groups=["system:authenticated"],
         )
 
         with (
@@ -141,4 +158,27 @@ class TestTokenReviewValidator:
             identity = await validator.validate_token("carols-token")
 
         assert identity.username == "carol"
-        assert identity.groups == []
+        assert identity.groups == ["system:authenticated"]
+
+    async def test_validate_token_deduplicates_groups(
+        self, validator: TokenReviewValidator
+    ) -> None:
+        """Groups appearing in both TokenReview and OCP User are deduplicated."""
+        review_resp = _make_token_review_response(
+            authenticated=True,
+            username="dave",
+            uid="uid-dave",
+            groups=["system:authenticated", "team-a"],
+        )
+
+        with (
+            patch.object(validator._authn_api, "create_token_review", return_value=review_resp),
+            patch.object(
+                validator._custom_api,
+                "get_cluster_custom_object",
+                return_value={"groups": ["team-a", "team-b"]},
+            ),
+        ):
+            identity = await validator.validate_token("daves-token")
+
+        assert identity.groups == ["system:authenticated", "team-a", "team-b"]

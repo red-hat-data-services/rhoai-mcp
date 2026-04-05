@@ -99,6 +99,7 @@ TRAINING_COMPOSITE_PERMISSIONS: dict[str, list[dict[str, str]]] = {
     ],
     "setup_nfs_storage": [
         {"apiGroup": "storage.k8s.io", "resource": "storageclasses", "verb": "list"},
+        {"apiGroup": "", "resource": "persistentvolumes", "verb": "create"},
     ],
     "fix_pvc_permissions": [
         {"apiGroup": "", "resource": "persistentvolumeclaims", "verb": "get"},

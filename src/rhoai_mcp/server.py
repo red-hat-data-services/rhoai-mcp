@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -98,13 +99,17 @@ class RHOAIServer:
             return {}
         return self._plugin_manager.healthy_plugins
 
-    def get_allowed_tools(self) -> set[str] | None:
+    def get_allowed_tools(self) -> tuple[set[str], set[str]] | None:
         """Get the set of tool names the current user can access.
 
         Returns None when OIDC is disabled (all tools allowed).
-        Returns a set of tool names when OIDC is enabled.
+        Returns (allowed_tools, governed_tools) when OIDC is enabled.
+        ``governed_tools`` is the set of tool names that have RBAC permission
+        mappings.  Tools not in this set have no mapping and should be allowed
+        by default.
         """
         if not self._config.oidc_enabled:
+            logger.debug("get_allowed_tools: OIDC disabled, returning None")
             return None
 
         from rhoai_mcp.auth.rbac import RBACChecker, ToolPermission
@@ -112,7 +117,10 @@ class RHOAIServer:
 
         ctx = UserContext.current()
         if ctx is None:
-            return set()  # No user context = no tools
+            logger.warning("get_allowed_tools: no UserContext, returning empty set")
+            return set(), set()  # No user context = no tools
+
+        logger.debug("get_allowed_tools: user=%s groups=%s", ctx.username, ctx.groups)
 
         # Collect tool permission mappings from plugins
         if not self._plugin_manager:
@@ -128,6 +136,8 @@ class RHOAIServer:
         for tool_name, perm_dicts in raw_perms.items():
             tool_perms[tool_name] = [ToolPermission.from_dict(p) for p in perm_dicts]
 
+        governed_tools = set(tool_perms.keys())
+
         # Create RBAC checker using the SA's API client (not impersonating)
         from kubernetes import client as k8s_client  # type: ignore[import-untyped]
 
@@ -135,7 +145,8 @@ class RHOAIServer:
         authz_api = k8s_client.AuthorizationV1Api(self._k8s_client._api_client)
         checker = RBACChecker(authz_api)
 
-        return checker.filter_tools(ctx.username, ctx.groups, tool_perms)
+        allowed = checker.filter_tools(ctx.username, ctx.groups, tool_perms)
+        return allowed, governed_tools
 
     def _init_k8s_client(self) -> None:
         """Initialize and connect the Kubernetes client.
@@ -258,27 +269,24 @@ class RHOAIServer:
 
         # Register OIDC auth components if enabled
         if self._config.oidc_enabled:
-            self._setup_oidc_auth(mcp)
+            self._setup_auth(mcp)
 
         return mcp
 
-    def _setup_oidc_auth(self, mcp: FastMCP) -> None:
-        """Configure OIDC authentication middleware and endpoints."""
+    def _setup_auth(self, mcp: FastMCP) -> None:
+        """Configure token validation middleware and metadata endpoint."""
         from rhoai_mcp.auth.metadata import build_protected_resource_metadata
         from rhoai_mcp.auth.oidc import OIDCValidator
         from rhoai_mcp.auth.token_review import TokenReviewValidator
         from rhoai_mcp.config import OIDCTokenMode
 
         self._config.validate_oidc_config()
-        # issuer_url is guaranteed non-None here by validate_oidc_config()
-        assert self._config.oidc_issuer_url is not None
-        issuer_url = self._config.oidc_issuer_url
 
         # Ensure K8s client is connected
         if not self._k8s_client or not self._k8s_client.is_connected:
             raise RuntimeError("K8s client not connected. Call startup() first.")
 
-        # Create the appropriate validator
+        # Create the appropriate validator and determine issuer URL for metadata
         validator: OIDCValidator | TokenReviewValidator
         if self._config.oidc_token_mode == OIDCTokenMode.TOKEN_REVIEW:
             api_client = self._k8s_client._api_client
@@ -289,7 +297,9 @@ class RHOAIServer:
             issuer_url = self._config.oidc_ocp_api_url or api_client.configuration.host
             logger.info("Auth mode: TokenReview (OCP OAuth)")
         else:
-            # issuer_url already set from assert above
+            # JWT mode: issuer_url is guaranteed non-None by validate_oidc_config()
+            assert self._config.oidc_issuer_url is not None
+            issuer_url = self._config.oidc_issuer_url
             validator = OIDCValidator(
                 issuer_url=issuer_url,
                 audience=self._config.oidc_audience,
@@ -299,8 +309,10 @@ class RHOAIServer:
             )
             logger.info("Auth mode: OIDC JWT")
 
-        # Build resource metadata URL
-        resource_url = f"https://{self._config.host}:{self._config.port}"
+        # Build resource metadata URL (external Route URL, or fallback to listen address)
+        resource_url = (
+            self._config.oidc_resource_url or f"https://{self._config.host}:{self._config.port}"
+        )
         metadata_path = "/.well-known/oauth-protected-resource"
 
         # Register Protected Resource Metadata endpoint
@@ -313,27 +325,129 @@ class RHOAIServer:
             )
             return JSONResponse(meta)
 
-        # Add auth middleware
+        # Wrap sse_app/streamable_http_app with auth middleware.
+        # Uses pure ASGI wrapping (not add_middleware) because
+        # BaseHTTPMiddleware is incompatible with SSE streaming.
         exclude_paths = ["/health", metadata_path]
         self._oidc_resource_metadata_url = f"{resource_url}{metadata_path}"
 
         from rhoai_mcp.auth.middleware import OIDCAuthMiddleware
 
-        starlette_app = getattr(mcp, "_app", None) or getattr(mcp, "app", None)
-        if starlette_app and hasattr(starlette_app, "add_middleware"):
-            starlette_app.add_middleware(
-                OIDCAuthMiddleware,
+        original_sse_app = mcp.sse_app
+
+        def patched_sse_app(mount_path: str | None = None) -> Any:
+            app = original_sse_app(mount_path)
+            return OIDCAuthMiddleware(
+                app,
                 validator=validator,
                 exclude_paths=exclude_paths,
                 resource_metadata_url=self._oidc_resource_metadata_url,
             )
-        else:
-            logger.warning(
-                "Could not attach OIDC middleware to FastMCP app. "
-                "Check FastMCP version for ASGI app access."
-            )
 
-        logger.info("OIDC authentication enabled")
+        mcp.sse_app = patched_sse_app  # type: ignore[method-assign]
+
+        if hasattr(mcp, "streamable_http_app"):
+            original_http_app = mcp.streamable_http_app
+
+            def patched_http_app() -> Any:
+                app = original_http_app()
+                return OIDCAuthMiddleware(
+                    app,
+                    validator=validator,
+                    exclude_paths=exclude_paths,
+                    resource_metadata_url=self._oidc_resource_metadata_url,
+                )
+
+            mcp.streamable_http_app = patched_http_app  # type: ignore[method-assign]
+
+        logger.info("Auth middleware will be attached when transport app is created")
+
+        # Install tool-level RBAC filtering
+        self._install_tool_filtering(mcp)
+
+        logger.info("Authentication enabled")
+
+    def _install_tool_filtering(self, mcp: FastMCP) -> None:
+        """Patch lowlevel request handlers to enforce per-user RBAC filtering.
+
+        FastMCP registers protocol handlers via closures at setup time.
+        Monkey-patching methods on the FastMCP instance has no effect because
+        the lowlevel server's request_handlers dict still holds the original
+        closures. We must wrap the handlers in that dict directly.
+        """
+        from mcp import types as mcp_types
+
+        server = self
+        lowlevel = mcp._mcp_server  # noqa: SLF001
+
+        # Wrap list_tools handler
+        original_list_handler = lowlevel.request_handlers.get(mcp_types.ListToolsRequest)
+        if original_list_handler is None:
+            logger.warning("No ListToolsRequest handler registered, skipping tool filtering")
+            return
+
+        async def filtered_list_handler(req: mcp_types.ListToolsRequest) -> mcp_types.ServerResult:
+            result = await original_list_handler(req)
+            try:
+                check = await asyncio.to_thread(server.get_allowed_tools)
+            except Exception:
+                logger.error("RBAC check failed, denying all tools", exc_info=True)
+                return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=[]))
+            if check is None:
+                return result
+            allowed, governed = check
+            list_result = result.root
+            assert isinstance(list_result, mcp_types.ListToolsResult)
+            all_tools = list_result.tools
+            # Tools with permission mappings must pass RBAC; unmapped tools are allowed
+            filtered = [t for t in all_tools if t.name in allowed or t.name not in governed]
+            logger.info("Tool filtering: %d/%d tools allowed", len(filtered), len(all_tools))
+            return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=filtered))
+
+        lowlevel.request_handlers[mcp_types.ListToolsRequest] = filtered_list_handler
+
+        # Wrap call_tool handler
+        original_call_handler = lowlevel.request_handlers.get(mcp_types.CallToolRequest)
+        if original_call_handler is None:
+            logger.warning("No CallToolRequest handler registered, skipping call filtering")
+            return
+
+        async def filtered_call_handler(req: mcp_types.CallToolRequest) -> mcp_types.ServerResult:
+            tool_name = req.params.name
+            try:
+                check = await asyncio.to_thread(server.get_allowed_tools)
+            except Exception:
+                logger.error("RBAC check failed for tool '%s'", tool_name, exc_info=True)
+                return mcp_types.ServerResult(
+                    mcp_types.CallToolResult(
+                        content=[
+                            mcp_types.TextContent(
+                                type="text",
+                                text=f"Tool '{tool_name}' is not permitted: RBAC check failed",
+                            )
+                        ],
+                        isError=True,
+                    )
+                )
+            if check is not None:
+                allowed, governed = check
+                # Only enforce for tools with permission mappings
+                if tool_name in governed and tool_name not in allowed:
+                    return mcp_types.ServerResult(
+                        mcp_types.CallToolResult(
+                            content=[
+                                mcp_types.TextContent(
+                                    type="text",
+                                    text=f"Tool '{tool_name}' is not permitted for the current user",
+                                )
+                            ],
+                            isError=True,
+                        )
+                    )
+            return await original_call_handler(req)
+
+        lowlevel.request_handlers[mcp_types.CallToolRequest] = filtered_call_handler
+        logger.info("Tool-level RBAC filtering installed (request_handlers patched)")
 
     def _register_core_resources(self, mcp: FastMCP) -> None:
         """Register core MCP resources for cluster information."""

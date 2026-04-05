@@ -219,6 +219,7 @@ data:
   RHOAI_MCP_ENABLE_DANGEROUS_OPERATIONS: "false"
   # OIDC authentication (disabled by default)
   RHOAI_MCP_OIDC_ENABLED: "false"
+  # RHOAI_MCP_OIDC_TOKEN_MODE: "jwt"  # "jwt" or "token-review"
   # RHOAI_MCP_OIDC_ISSUER_URL: "https://keycloak.example.com/realms/rhoai"
   # RHOAI_MCP_OIDC_AUDIENCE: "rhoai-mcp"
 

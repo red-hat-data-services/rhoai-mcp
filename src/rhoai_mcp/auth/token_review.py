@@ -59,8 +59,19 @@ class TokenReviewValidator:
 
         uid = result.status.user.uid
 
-        # Fetch OCP groups
-        groups = await self._fetch_ocp_groups(username)
+        # Start with system groups from TokenReview (e.g. system:authenticated)
+        token_groups = result.status.user.groups or []
+
+        # Merge with explicit OCP User groups
+        ocp_groups = await self._fetch_ocp_groups(username)
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        groups: list[str] = []
+        for g in [*token_groups, *ocp_groups]:
+            if g not in seen:
+                seen.add(g)
+                groups.append(g)
 
         return ValidatedIdentity(
             username=username,
