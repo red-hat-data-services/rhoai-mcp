@@ -2,6 +2,7 @@
 
 import logging
 import re
+import shlex
 from typing import TYPE_CHECKING, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -108,6 +109,63 @@ async def _resolve_catalog_storage_uri(
         )
 
     return None
+
+
+def _extract_oci_registry(uri: str) -> str | None:
+    """Extract the registry hostname from an OCI or docker URI.
+
+    Args:
+        uri: URI like "oci://quay.io/org/image:tag" or "docker://registry.redhat.io/image:tag".
+
+    Returns:
+        Registry hostname (e.g., "quay.io", "localhost:5000") or None if unparseable.
+    """
+    # Strip scheme
+    for prefix in ("oci://", "docker://"):
+        if uri.startswith(prefix):
+            uri = uri[len(prefix) :]
+            break
+
+    # First path component is the registry host (possibly with port)
+    parts = uri.split("/")
+    if not parts or not parts[0]:
+        return None
+    host = parts[0]
+    # Accept hostnames with a dot (quay.io), a port suffix (localhost:5000), or "localhost"
+    # A colon followed by digits indicates a port; colon with non-digits is a tag (image:latest)
+    has_port = ":" in host and host.split(":")[-1].isdigit()
+    if "." in host or has_port or host == "localhost":
+        return host
+    return None
+
+
+def _check_pull_secrets(k8s: Any, namespace: str, registry: str, warnings: list[str]) -> None:
+    """Check if a namespace has pull secrets for an OCI registry.
+
+    Checks the default service account's imagePullSecrets. If none are
+    configured, adds a warning with remediation instructions.
+    """
+    try:
+        sa = k8s.core_v1.read_namespaced_service_account(name="default", namespace=namespace)
+        pull_secrets = sa.image_pull_secrets or []
+        if not pull_secrets:
+            safe_registry = shlex.quote(registry)
+            safe_namespace = shlex.quote(namespace)
+            warnings.append(
+                f"No image pull secrets configured in namespace '{namespace}' for "
+                f"registry '{registry}'. Create a pull secret and link it to the "
+                f"default service account: "
+                f"oc create secret docker-registry <secret-name> "
+                f"--docker-server={safe_registry} --docker-username=<user> "
+                f"--docker-password=<token> -n {safe_namespace} && "
+                f"oc secrets link default <secret-name> --for=pull -n {safe_namespace}"
+            )
+    except Exception as e:
+        logger.warning("Could not check pull secrets for %s: %s", namespace, e)
+        warnings.append(
+            f"Could not verify pull secrets for registry '{registry}' in "
+            f"namespace '{namespace}': {e}"
+        )
 
 
 # Model size estimates by parameter count (in billions)
@@ -558,6 +616,15 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
             elif storage_uri.startswith("s3://"):
                 # S3 validation would require checking data connections
                 warnings.append("Ensure S3 credentials are configured via data connection")
+            elif storage_uri.startswith("oci://") or storage_uri.startswith("docker://"):
+                registry = _extract_oci_registry(storage_uri)
+                if registry:
+                    _check_pull_secrets(server.k8s, namespace, registry, warnings)
+                else:
+                    issues.append(
+                        f"Could not determine OCI registry from storage_uri: {storage_uri}"
+                    )
+                    storage_valid = False
         else:
             warnings.append("No storage_uri provided - you'll need to specify model location")
 
@@ -736,6 +803,31 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
                     "message": "S3 storage configured (ensure data connection exists)",
                 }
             )
+        elif storage_uri.startswith("oci://") or storage_uri.startswith("docker://"):
+            registry = _extract_oci_registry(storage_uri)
+            warnings: list[str] = []
+            if registry:
+                _check_pull_secrets(server.k8s, namespace, registry, warnings)
+                checks.append(
+                    {
+                        "name": "Storage",
+                        "passed": True,
+                        "message": f"OCI registry storage ({registry})",
+                    }
+                )
+            else:
+                checks.append(
+                    {
+                        "name": "Storage",
+                        "passed": False,
+                        "message": f"Could not determine OCI registry from storage_uri:"
+                        f" {storage_uri}",
+                    }
+                )
+                all_passed = False
+                actions_needed.append("Use an OCI/docker URI that includes a registry hostname")
+            if warnings:
+                actions_needed.extend(warnings)
         else:
             checks.append(
                 {
