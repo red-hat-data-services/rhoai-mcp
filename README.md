@@ -108,18 +108,37 @@ Available Make targets:
 
 ### Kubernetes Deployment
 
-For in-cluster deployment, apply the Kubernetes manifests:
+Deploy using Kustomize with environment-specific overlays:
 
 ```bash
-kubectl apply -f deploy/kubernetes/deployment.yaml
+# KIND / local development
+kustomize build deploy/kustomize/overlays/kind/ | kubectl apply -f -
+
+# OpenShift production
+kustomize build deploy/kustomize/overlays/openshift/ | oc apply -f -
 ```
 
-This creates:
-- Namespace `rhoai-mcp`
-- ServiceAccount with RBAC for RHOAI resources
-- Deployment running the MCP server with SSE transport
-- Service exposing port 8000
-- Route (OpenShift only) with TLS termination
+The Kustomize structure uses a shared base with per-environment overlays:
+
+```text
+deploy/kustomize/
+├── base/                    # Shared resources (all environments)
+│   ├── clusterrole.yaml     # RBAC for RHOAI resources
+│   ├── deployment.yaml      # Hardened pod spec (non-root, read-only rootfs, probes)
+│   ├── configmap.yaml       # Default config (SSE transport, INFO logging)
+│   └── ...
+└── overlays/
+    ├── kind/                # NodePort, DEBUG logging, imagePullPolicy: Never
+    └── openshift/           # GHCR image, TLS Route, OpenShift-specific RBAC, NetworkPolicy
+```
+
+The **KIND overlay** enables debug logging, dangerous operations, `NodePort` service type, and `imagePullPolicy: Never` (for `kind load docker-image`).
+
+The **OpenShift overlay** adds a TLS-terminated Route, OpenShift-specific RBAC rules (projects, routes, templates, imagestreams, DataScienceCluster, Model Registry), and a NetworkPolicy allowing access to the model-catalog service.
+
+To customize the namespace, set it in a downstream overlay's `kustomization.yaml` and include the `replacements` block from the base to keep the `ClusterRoleBinding` subject namespace in sync (see comments in `base/kustomization.yaml`). For the OpenShift overlay, also update the hardcoded namespace in:
+- `deploy/kustomize/overlays/openshift/route.yaml` → `metadata.namespace`
+- `deploy/kustomize/overlays/openshift/networkpolicy.yaml` → `metadata.namespace` and `spec.ingress[].from[].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]`
 
 ## Configuration
 
