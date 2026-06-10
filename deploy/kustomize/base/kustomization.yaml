@@ -12,15 +12,38 @@ resources:
   - deployment.yaml
   - service.yaml
 
-# Keep ClusterRoleBinding subject namespace in sync with the configured namespace.
-# Kustomize's namespace transformer does not update subjects[].namespace, so we use
-# a replacement sourced from the ServiceAccount's metadata.namespace (which IS set
-# by the namespace transformer).
-#
-# NOTE: If a downstream overlay overrides the namespace, it must also include this
-# same replacements block in its own kustomization.yaml — base-level replacements
-# run before the overlay's namespace transformer.
+generatorOptions:
+  disableNameSuffixHash: true
+
+# Generate a ConfigMap from params.env so the container image reference can be
+# injected into the Deployment via a replacement.  The ODH/RHOAI operator
+# updates params.env at startup (ApplyParams) with RELATED_IMAGE values from
+# the CSV, enabling air-gapped / disconnected deployments.
+configMapGenerator:
+  - name: rhoai-mcp-images
+    envs:
+      - params.env
+
 replacements:
+  # Inject the container image from params.env into the Deployment.
+  - source:
+      kind: ConfigMap
+      name: rhoai-mcp-images
+      fieldPath: data.RHOAI_MCP_IMAGE
+    targets:
+      - select:
+          kind: Deployment
+          name: rhoai-mcp
+        fieldPaths:
+          - spec.template.spec.containers.[name=rhoai-mcp].image
+  # Keep ClusterRoleBinding subject namespace in sync with the configured
+  # namespace.  Kustomize's namespace transformer does not update
+  # subjects[].namespace, so we source it from the ServiceAccount's
+  # metadata.namespace (which IS set by the namespace transformer).
+  #
+  # NOTE: If a downstream overlay overrides the namespace, it must also
+  # include this same replacements block — base-level replacements run
+  # before the overlay's namespace transformer.
   - source:
       kind: ServiceAccount
       name: rhoai-mcp
