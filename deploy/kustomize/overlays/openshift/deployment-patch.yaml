@@ -1,7 +1,4 @@
 - op: replace
-  path: /spec/template/spec/containers/0/image
-  value: ghcr.io/opendatahub-io/rhoai-mcp:v0.1
-- op: replace
   path: /spec/template/spec/containers/0/imagePullPolicy
   value: Always
 - op: remove

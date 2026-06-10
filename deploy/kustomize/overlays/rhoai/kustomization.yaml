@@ -1,0 +1,46 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Operator-managed overlay for Red Hat OpenShift AI (RHOAI).
+# The operator sets the target namespace via its namespace plugin and
+# replaces image references via base/params.env at deploy time.
+
+namespace: redhat-ods-applications
+
+resources:
+  - ../openshift
+
+patches:
+  # Remove the Namespace resource — the operator manages namespace lifecycle.
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: rhoai-mcp
+  # RHOAI defaults to read-only mode for safer production use.
+  # The CRD spec can override this at runtime.
+  - target:
+      kind: ConfigMap
+      name: rhoai-mcp-config
+    patch: |
+      - op: replace
+        path: /data/RHOAI_MCP_READ_ONLY_MODE
+        value: "true"
+
+replacements:
+  - source:
+      kind: ServiceAccount
+      name: rhoai-mcp
+      fieldPath: metadata.namespace
+    targets:
+      - select:
+          kind: ClusterRoleBinding
+          name: rhoai-mcp
+        fieldPaths:
+          - subjects.[kind=ServiceAccount].namespace
+      - select:
+          kind: Route
+          name: rhoai-mcp
+        fieldPaths:
+          - metadata.namespace
