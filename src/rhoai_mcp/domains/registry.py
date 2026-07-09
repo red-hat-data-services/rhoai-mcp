@@ -15,7 +15,6 @@ from rhoai_mcp.domains.permissions import (
     NOTEBOOKS_PERMISSIONS,
     PIPELINES_PERMISSIONS,
     PROJECTS_PERMISSIONS,
-    QUICKSTARTS_PERMISSIONS,
     STORAGE_PERMISSIONS,
     TRAINING_PERMISSIONS,
 )
@@ -363,41 +362,6 @@ class ModelRegistryPlugin(BasePlugin):
         return True, f"Model Registry at {server.config.model_registry_url}"
 
 
-class QuickstartsPlugin(BasePlugin):
-    """Plugin for AI Quickstart templates."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            PluginMetadata(
-                name="quickstarts",
-                version="0.1.0",
-                description="AI Quickstart templates for RHOAI",
-                maintainer="rhoai-mcp@redhat.com",
-                requires_crds=[],
-            )
-        )
-
-    @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
-        from rhoai_mcp.domains.quickstarts.tools import register_tools
-
-        register_tools(mcp, server)
-
-    @hookimpl
-    def rhoai_register_resources(self, mcp: FastMCP, server: RHOAIServer) -> None:
-        from rhoai_mcp.domains.quickstarts.tools import register_resources
-
-        register_resources(mcp, server)
-
-    @hookimpl
-    def rhoai_get_tool_permissions(self) -> dict[str, list[dict[str, str]]]:
-        return QUICKSTARTS_PERMISSIONS
-
-    @hookimpl
-    def rhoai_health_check(self, server: RHOAIServer) -> tuple[bool, str]:  # noqa: ARG002
-        return True, "Quickstarts ready"
-
-
 class ExamplePlugin(BasePlugin):
     """Example plugin for the contributor blueprint.
 
@@ -446,7 +410,6 @@ def get_core_plugins() -> list[BasePlugin]:
         TrainingPlugin(),
         PromptsPlugin(),
         ModelRegistryPlugin(),
-        QuickstartsPlugin(),
     ]
 
     if os.environ.get("RHOAI_MCP_EXAMPLE_PLUGIN"):
