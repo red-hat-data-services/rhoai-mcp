@@ -19,21 +19,36 @@ from evals.lcs_client import LCSResult
 logger = logging.getLogger(__name__)
 
 
-async def fetch_tool_schemas(rhoai_mcp_url: str) -> list[Tool]:
-    """Fetch tool schemas from a running rhoai-mcp server via MCP SSE client.
+async def fetch_tool_schemas(
+    rhoai_mcp_url: str, transport: str = "sse"
+) -> list[Tool]:
+    """Fetch tool schemas from a running rhoai-mcp server.
 
     Args:
         rhoai_mcp_url: Base URL of the rhoai-mcp server (e.g. http://localhost:8000).
+        transport: MCP transport to use: 'streamable-http' or 'sse'.
 
     Returns:
         List of mcp.types.Tool objects.
     """
     from mcp import ClientSession
-    from mcp.client.sse import sse_client
 
-    sse_url = f"{rhoai_mcp_url.rstrip('/')}/sse"
+    base = rhoai_mcp_url.rstrip("/")
+    if transport == "sse":
+        from mcp.client.sse import sse_client
 
-    async with sse_client(sse_url) as (read_stream, write_stream):
+        client_context = sse_client(f"{base}/sse")
+    elif transport == "streamable-http":
+        from mcp.client.streamable_http import streamable_http_client
+
+        client_context = streamable_http_client(f"{base}/mcp")
+    else:
+        raise ValueError(
+            f"Unsupported transport {transport!r}: must be 'sse' or 'streamable-http'"
+        )
+
+    async with client_context as streams:
+        read_stream, write_stream = streams[0], streams[1]
         async with ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             result = await session.list_tools()
