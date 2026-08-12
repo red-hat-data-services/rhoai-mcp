@@ -32,7 +32,9 @@ spec:
     value: 5d
   - name: enable-slack-failure-notification
     value: "false"
-
+  - name: prefetch-input
+    value: |
+      [{"type": "pip", "path": ".", requirements_file: "requirements-check.txt"}]
   - name: build-platforms
     value:
     - linux/x86_64
