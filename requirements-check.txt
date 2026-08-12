@@ -44,6 +44,9 @@ h11==0.16.0
     #   httpcore
     #   uvicorn
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
+hatchling==1.31.0
+    # via rhoai-mcp (pyproject.toml)
+    # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
 httpcore==1.0.9
     # via httpx
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
@@ -76,8 +79,16 @@ mcp==1.29.0
 oauthlib==3.3.1
     # via requests-oauthlib
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
+packaging==26.3
+    # via hatchling
+    # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
+pathspec==1.1.1
+    # via hatchling
+    # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
 pluggy==1.6.0
-    # via rhoai-mcp (pyproject.toml)
+    # via
+    #   rhoai-mcp (pyproject.toml)
+    #   hatchling
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
 pycparser==3.0
     # via cffi
@@ -143,6 +154,9 @@ starlette==1.4.1
     # via
     #   mcp
     #   sse-starlette
+    # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
+trove-classifiers==2026.6.1.19
+    # via hatchling
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA1/cpu-ubi9-test/simple/
 typing-extensions==4.16.0
     # via
