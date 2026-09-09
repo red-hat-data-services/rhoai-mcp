@@ -1,7 +1,7 @@
 # Dockerfile.konflux — Konflux CI build for RHOAI MCP Server
 # Adapted for AIPCC base images and Konflux build pipeline requirements.
 
-ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu:3.6.0-ea.1-1785868204@sha256:ea1146bf5a780606e07879efb7a3de1aee48037424799017f8774a3d41d83fea
+ARG BASE_IMAGE=quay.io/aipcc/base-images/cpu-el9.8:3.6.0-ea.2-1788562451@sha256:5dbe6a3e14877ef9fbda55e6cef66430a244c6a5c73a9a72bfef5b3af31e44c5
 
 FROM ${BASE_IMAGE}
 
