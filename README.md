@@ -1,11 +1,12 @@
 # RHOAI MCP Server
 
 [![CI](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/ci.yml)
+[![Check others imagerefs](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/check-others-imagerefs.yml/badge.svg?branch=main&event=schedule)](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/check-others-imagerefs.yml?query=branch%3Amain+event%3Aschedule)
 [![Container Build](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/container-build.yml/badge.svg)](https://github.com/opendatahub-io/rhoai-mcp/actions/workflows/container-build.yml)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/opendatahub-io/rhoai-mcp)
 [![Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/opendatahub-io/rhoai-mcp)
 [![Python](https://img.shields.io/badge/python-3.10%2B-green.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0-brightgreen.svg)](LICENSE)
 
 An MCP (Model Context Protocol) server that enables AI agents to interact with Red Hat OpenShift AI (RHOAI) environments. This server replicates the capabilities of the OpenShift AI Dashboard through programmatic tools.
 
@@ -868,5 +869,4 @@ AI Agent Response ← Pydantic Model ← K8s Response ← K8sClient → Kubernet
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
-
+Apache License 2.0 - see [LICENSE](LICENSE) for details.
