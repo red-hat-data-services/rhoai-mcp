@@ -8,7 +8,7 @@
 # Stage 1: Builder - Install dependencies with uv
 # =============================================================================
 
-ARG BASE_IMAGE=quay.io/opendatahub/odh-midstream-python-base-3-12:1.20260625.1@sha256:e50b08950097ed95f137e6899696911422166ef539153bb08c15ee36b05a54f0
+ARG BASE_IMAGE=quay.io/opendatahub/odh-midstream-python-base-3-12:1.20260911.0@sha256:7ce663579086392aac97d787c6096513423c360a197520e88a9f7d22f91999b6
 
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE} AS builder
 

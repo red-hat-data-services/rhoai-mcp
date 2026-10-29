@@ -7,7 +7,7 @@ annotated-types==0.8.0
     #   -c constraints-lock.tmp
     #   pydantic
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-anyio==4.14.2
+anyio==4.15.1
     # via
     #   -c constraints-lock.tmp
     #   httpx
@@ -39,7 +39,7 @@ charset-normalizer==3.5.1
     #   -c constraints-lock.tmp
     #   requests
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-click==8.3.3
+click==8.5.0
     # via
     #   -c constraints-lock.tmp
     #   uvicorn
@@ -101,7 +101,7 @@ jsonschema-specifications==2025.9.1
     #   -c constraints-lock.tmp
     #   jsonschema
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-kubernetes==35.0.0
+kubernetes==36.0.3
     # via
     #   -c constraints-lock.tmp
     #   rhoai-mcp (pyproject.toml)
@@ -116,7 +116,7 @@ markupsafe==3.0.3
     #   -c constraints-lock.tmp
     #   jinja2
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-mcp==1.29.1
+mcp==2.2.0
     # via
     #   -c constraints-lock.tmp
     #   rhoai-mcp (pyproject.toml)
@@ -151,7 +151,7 @@ pydantic==2.13.5
     #   mcp
     #   pydantic-settings
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-pydantic-core==2.46.5
+pydantic-core==2.49.0
     # via
     #   -c constraints-lock.tmp
     #   pydantic
@@ -163,7 +163,7 @@ pydantic-settings==2.15.0
     #   llm-d-planner
     #   mcp
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-pyjwt==2.13.0
+pyjwt==2.14.0
     # via
     #   -c constraints-lock.tmp
     #   rhoai-mcp (pyproject.toml)
@@ -219,7 +219,7 @@ six==1.17.0
     #   kubernetes
     #   python-dateutil
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-sse-starlette==3.4.8
+sse-starlette==3.4.11
     # via
     #   -c constraints-lock.tmp
     #   mcp
@@ -265,7 +265,7 @@ uvicorn==0.52.4
     #   -c constraints-lock.tmp
     #   mcp
     # from https://packages.redhat.com/api/pypi/public-rhai/rhoai/3.6-EA2/cpu-ubi9-test/simple/
-websocket-client==1.9.1
+websocket-client==1.9.2
     # via
     #   -c constraints-lock.tmp
     #   kubernetes
