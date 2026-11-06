@@ -7,4 +7,12 @@ updates:
   - package-ecosystem: "uv"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+    exclude-paths:
+      - "requirements-cpu.txt"  # Generated separately with make generate-requirements-cpu.
+    ignore:
+      # Major migrations need planning; Renovate blocks these too (see renovate.json).
+      - dependency-name: "mcp"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "kubernetes"
+        update-types: ["version-update:semver-major"]
