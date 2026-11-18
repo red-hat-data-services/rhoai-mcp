@@ -40,6 +40,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5)" || exit 0
 
+# uv is development tooling; the container starts rhoai-mcp directly.
+USER 0
+RUN rm -f /opt/app-root/bin/uv /opt/app-root/bin/uvx && \
+    test ! -e /opt/app-root/bin/uv && \
+    test ! -e /opt/app-root/bin/uvx
 USER 1001
 
 # Default entrypoint runs the MCP server
