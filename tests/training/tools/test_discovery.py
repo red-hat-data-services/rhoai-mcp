@@ -1,6 +1,6 @@
 """Tests for training discovery tools."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,7 +13,7 @@ class TestDiscoveryTools:
 
     @pytest.fixture
     def mock_mcp(self) -> MagicMock:
-        """Create a mock FastMCP server."""
+        """Create a mock MCPServer."""
         mock = MagicMock()
         mock.tool = MagicMock(return_value=lambda f: f)
         return mock
@@ -23,6 +23,7 @@ class TestDiscoveryTools:
         """Create a mock RHOAIServer."""
         server = MagicMock()
         server.k8s = MagicMock()
+        server.get_k8s = MagicMock(return_value=server.k8s)
         server.k8s.core_v1 = MagicMock()
         server.config.is_operation_allowed.return_value = (True, None)
         # Context window optimization settings
@@ -38,7 +39,7 @@ class TestDiscoveryTools:
         register_tools(mock_mcp, mock_server)
 
         # Check that tool decorator was called for each tool
-        assert mock_mcp.tool.call_count >= 4  # At least 4 discovery tools
+        assert mock_mcp.tool.call_count == 3
 
     def test_list_training_jobs_empty(self, mock_mcp: MagicMock, mock_server: MagicMock) -> None:
         """Test listing training jobs when none exist."""
@@ -120,37 +121,6 @@ class TestDiscoveryTools:
         assert result["model_id"] == "meta-llama/Llama-2-7b-hf"
         assert result["dataset_id"] == "tatsu-lab/alpaca"
 
-    def test_get_cluster_resources(self, mock_mcp: MagicMock, mock_server: MagicMock) -> None:
-        """Test getting cluster resources."""
-        # Mock node list
-        mock_node = MagicMock()
-        mock_node.metadata.name = "worker-1"
-        mock_node.status.capacity = {"cpu": "32", "memory": "128Gi", "nvidia.com/gpu": "4"}
-        mock_node.status.allocatable = {"cpu": "30", "memory": "120Gi", "nvidia.com/gpu": "4"}
-
-        mock_node_list = MagicMock()
-        mock_node_list.items = [mock_node]
-        mock_server.k8s.core_v1.list_node.return_value = mock_node_list
-
-        tools = {}
-
-        def capture_tool():
-            def decorator(f):
-                tools[f.__name__] = f
-                return f
-
-            return decorator
-
-        mock_mcp.tool = capture_tool
-        register_tools(mock_mcp, mock_server)
-
-        result = tools["get_cluster_resources"]()
-
-        assert result["cpu_total"] == 32
-        assert result["node_count"] == 1
-        assert result["has_gpus"] is True
-        assert result["gpu_info"]["total"] == 4
-
     def test_list_training_runtimes(self, mock_mcp: MagicMock, mock_server: MagicMock) -> None:
         """Test listing training runtimes."""
         mock_server.k8s.list_resources.return_value = [
@@ -189,7 +159,7 @@ def _make_mock_resource(
     mock.metadata.name = name
     mock.metadata.namespace = namespace
     mock.metadata.uid = f"{name}-uid"
-    mock.metadata.creation_timestamp = datetime.now(timezone.utc)
+    mock.metadata.creation_timestamp = datetime.now(UTC)
     mock.metadata.labels = labels or {}
     mock.metadata.annotations = annotations or {}
     mock.spec = spec or {}

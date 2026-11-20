@@ -26,7 +26,7 @@ An MCP (Model Context Protocol) server that enables AI agents to interact with R
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Runtime** | Python 3.11+ | Core language |
-| **MCP Framework** | FastMCP 1.0+ | Model Context Protocol server |
+| **MCP Framework** | MCPServer 2.0+ | Model Context Protocol server |
 | **Kubernetes Client** | kubernetes-python 28.1+ | Cluster API interactions |
 | **Data Validation** | Pydantic 2.0+ | Type-safe models and settings |
 | **HTTP Client** | httpx 0.27+ | Async HTTP requests |
@@ -170,6 +170,17 @@ When [required](deploy/kustomize/overlays/openshift-oidc/README.md), apply the N
 ```bash
 oc apply -f deploy/kustomize/overlays/openshift/networkpolicy.yaml
 ```
+
+## Testing Layers
+
+Behavioral testing is split across two layers with different scopes:
+
+| Layer | What it covers | Where |
+|---|---|---|
+| **In-repo smoke lane** (`Smoke E2E (KinD)` workflow) | Golden path on every PR: server boot and health, RBAC list-filtering and call-denial for two personas, and a token-rotation case — the server deployed into a KinD cluster in token-review mode, driven by a raw JSON-RPC client ([`ci/smoke/smoke_test.py`](ci/smoke/smoke_test.py)). SDK-agnostic on purpose: the client uses no MCP SDK, so the lane is inert to SDK upgrades. Runs in ~5–15 minutes. | [`.github/workflows/smoke-kind.yml`](.github/workflows/smoke-kind.yml) |
+| **Full E2E suite** (opendatahub-tests) | Post-deployment breadth: the MCP Gateway path, model-serving tool calls against real components, JWT/OIDC mode, and the full RBAC matrix — against productized, digest-pinned images on a real cluster. | [`opendatahub-tests`](https://github.com/opendatahub-io/opendatahub-tests) `tests/rhoai_mcp/` |
+
+The smoke lane is deliberately *not* a duplicate of the full suite: no gateway, no model-serving tool calls, no JWT/OIDC mode. It exists so that `main` (and long-lived branches) get behavioral signal at merge time without waiting on a deployment.
 
 ## Configuration
 
@@ -836,7 +847,7 @@ uv run mypy src/rhoai_mcp
 ┌─────────────────────────────────────────────────────────────────┐
 │                MCP Transport Layer (stdio/SSE/HTTP)             │
 ├─────────────────────────────────────────────────────────────────┤
-│  FastMCP Server (server.py)                                     │
+│  MCPServer (server.py)                                            │
 │  - Tool registration     - Resource registration                │
 │  - Prompt registration   - Lifecycle management                 │
 ├───────────────────┬─────────────────────┬───────────────────────┤
