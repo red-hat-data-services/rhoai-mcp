@@ -222,6 +222,15 @@ export RHOAI_MCP_TRANSPORT=stdio
 export RHOAI_MCP_TRANSPORT=streamable-http
 export RHOAI_MCP_HOST=127.0.0.1
 export RHOAI_MCP_PORT=8000
+
+# Stateless HTTP (streamable-http only): run without server-side sessions,
+# so any replica behind a round-robin load balancer can answer any request.
+# The default (stateful) keeps sessions in memory and requires sticky routing.
+# Multi-replica note: workflow tokens are signed with RHOAI_MCP_WORKFLOW_HMAC_SECRET,
+# which defaults to a per-process random value — set the same secret on every
+# replica, or a token issued by one replica fails verification on another.
+# See "Workflow Tokens" below.
+export RHOAI_MCP_STATELESS_HTTP=true
 ```
 
 ### Safety Settings
@@ -684,6 +693,18 @@ model_id: meta-llama/Llama-3.1-8B-Instruct
 | `delete_inference_service` | Delete deployed model |
 | `list_serving_runtimes` | List available runtimes |
 | `get_model_endpoint` | Get inference endpoint URL |
+
+### AutoML (3 tools)
+
+| Tool | Description |
+|------|-------------|
+| `list_automl_deployments` | List explicitly exposed AutoGluon deployments in a project |
+| `get_automl_deployment` | Get AutoML deployment status, input schema, and example record |
+| `predict_automl_deployment` | Validate JSON records, call KServe v2, and return predictions |
+
+Classification deployments return a class and probabilities when their AutoGluon
+ServingRuntime enables `PREDICT_PROBA=true`; regression deployments return numeric values.
+See [AutoML MCP deployments](docs/automl-mcp.md) for the exposure contract and client examples.
 
 ### Data Connections (4 tools)
 
