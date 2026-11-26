@@ -128,8 +128,15 @@ class TestRHOAIConfig:
         monkeypatch.delenv("RHOAI_MCP_ENABLED_PLUGINS", raising=False)
         config = RHOAIConfig(_env_file=None)
         assert config.enabled_plugins == [
-            "projects", "connections", "storage", "planner-composites",
-            "model_registry", "inference", "cluster-composites", "meta-composites",
+            "projects",
+            "connections",
+            "storage",
+            "planner-composites",
+            "model_registry",
+            "inference",
+            "automl",
+            "cluster-composites",
+            "meta-composites",
         ]
 
     def test_enabled_plugins_none_loads_all(self, monkeypatch):
@@ -228,7 +235,6 @@ class TestPlannerConfig:
         assert config.planner_model_catalog_url == "https://catalog.example.com"
 
 
-
 class TestOIDCConfig:
     """Tests for OIDC configuration."""
 
@@ -280,7 +286,9 @@ class TestOIDCConfig:
 
     def test_oidc_issuer_url_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """OIDC issuer URL can be set via environment variable."""
-        monkeypatch.setenv("RHOAI_MCP_OIDC_ISSUER_URL", "https://keycloak.example.com/auth/realms/rhoai")
+        monkeypatch.setenv(
+            "RHOAI_MCP_OIDC_ISSUER_URL", "https://keycloak.example.com/auth/realms/rhoai"
+        )
         config = RHOAIConfig()
         assert config.oidc_issuer_url == "https://keycloak.example.com/auth/realms/rhoai"
 
@@ -413,3 +421,40 @@ class TestOIDCKubeAuthStrategy:
             transport=TransportMode.SSE,
         )
         config.validate_oidc_config()  # Should not raise
+
+
+class TestStatelessHttpConfig:
+    """Tests for the stateless_http configuration (Streamable HTTP only)."""
+
+    def test_stateless_http_defaults_false(self) -> None:
+        """Default is stateful: in-memory sessions, sticky routing required."""
+        config = RHOAIConfig(transport=TransportMode.STREAMABLE_HTTP)
+        assert config.stateless_http is False
+
+    def test_stateless_http_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """RHOAI_MCP_STATELESS_HTTP=true enables stateless operation."""
+        monkeypatch.setenv("RHOAI_MCP_STATELESS_HTTP", "true")
+        config = RHOAIConfig(transport=TransportMode.STREAMABLE_HTTP)
+        assert config.stateless_http is True
+
+    def test_validate_stateless_rejects_stdio(self) -> None:
+        """Validation fails if stateless_http is set with stdio transport."""
+        config = RHOAIConfig(stateless_http=True, transport=TransportMode.STDIO)
+        with pytest.raises(ValueError, match="stateless_http.*streamable-http"):
+            config.validate_stateless_config()
+
+    def test_validate_stateless_rejects_sse(self) -> None:
+        """Validation fails if stateless_http is set with the legacy SSE transport."""
+        config = RHOAIConfig(stateless_http=True, transport=TransportMode.SSE)
+        with pytest.raises(ValueError, match="stateless_http.*streamable-http"):
+            config.validate_stateless_config()
+
+    def test_validate_stateless_accepts_streamable_http(self) -> None:
+        """Validation passes for stateless_http with streamable-http transport."""
+        config = RHOAIConfig(stateless_http=True, transport=TransportMode.STREAMABLE_HTTP)
+        config.validate_stateless_config()  # Should not raise
+
+    def test_validate_stateless_noop_when_disabled(self) -> None:
+        """Validation is a no-op when stateless_http is false, any transport."""
+        config = RHOAIConfig(stateless_http=False, transport=TransportMode.STDIO)
+        config.validate_stateless_config()  # Should not raise

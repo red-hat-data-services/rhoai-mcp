@@ -26,8 +26,31 @@ def _register_tools(mock_server: MagicMock) -> dict[str, Any]:
         return decorator
 
     mcp.tool = capture_tool
+    # tools call server.get_k8s(ctx); return the configured k8s mock
+    mock_server.get_k8s = MagicMock(return_value=mock_server.k8s)
     register_tools(mcp, mock_server)
     return registered_tools
+
+
+class TestModelIdLength:
+    def test_maximum_length_is_accepted(self) -> None:
+        tools = _register_tools(MagicMock())
+
+        result = tools["estimate_serving_resources"](model_id="x" * 252 + "-8b")
+
+        assert result["estimated_params_billion"] == 8.0
+
+    @pytest.mark.parametrize("length", [256, 257, 8192])
+    async def test_oversized_model_id_rejected_by_both_tools(self, length: int) -> None:
+        server = MagicMock()
+        tools = _register_tools(server)
+        model_id = "1" * length
+
+        with pytest.raises(ValueError, match="model_id must be at most 255 characters"):
+            tools["estimate_serving_resources"](model_id=model_id)
+        with pytest.raises(ValueError, match="model_id must be at most 255 characters"):
+            await tools["prepare_model_deployment"](namespace="test", model_id=model_id)
+        server.get_k8s.assert_not_called()
 
 
 class TestPrepareModelDeploymentCatalogLookup:
@@ -37,6 +60,7 @@ class TestPrepareModelDeploymentCatalogLookup:
     def mock_server(self) -> MagicMock:
         """Create a mock server with k8s client."""
         server = MagicMock()
+        server.get_k8s = MagicMock(return_value=server.k8s)
         server.config.model_registry_enabled = True
         # Mock k8s client for list_serving_runtimes
         mock_runtime = MagicMock()

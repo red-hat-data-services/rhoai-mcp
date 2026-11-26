@@ -1,12 +1,6 @@
 name: check-others
 
 on:
-  pull_request:
-    paths:
-      - .github/workflows/check-others.yml
-      - .github/scripts/list_rhoai_branches.py
-      - Makefile
-      - requirements-cpu.txt
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
@@ -19,31 +13,72 @@ jobs:
     if: github.repository == 'opendatahub-io/rhoai-mcp'
     runs-on: ubuntu-latest
     outputs:
-      branches: ${{ steps.branches.outputs.branches }}
-      latest-version: ${{ steps.branches.outputs.latest-version }}
+      releases: ${{ steps.releases.outputs.releases }}
+      latest-version: ${{ steps.releases.outputs.latest-version }}
+      rhds-branches: ${{ steps.rhds-branches.outputs.branches }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Discover RHDS branches
-        id: branches
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+        with:
+          version: 1.3.4
+      - name: Discover Quay releases
+        id: releases
+        env:
+          QUAY_READONLY_USERNAME: ${{ secrets.QUAY_READONLY_USERNAME }}
+          QUAY_READONLY_PASSWORD: ${{ secrets.QUAY_READONLY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$QUAY_READONLY_USERNAME" || -z "$QUAY_READONLY_PASSWORD" ]]; then
+            echo '::error::QUAY_READONLY_USERNAME and QUAY_READONLY_PASSWORD secrets are required.'
+            exit 1
+          fi
+          releases=$(
+            printf '%s' "$QUAY_READONLY_PASSWORD" |
+              oras repo tags --username "$QUAY_READONLY_USERNAME" --password-stdin \
+                quay.io/rhoai/odh-rhoai-mcp-rhel9 |
+              python3 .github/scripts/list_rhoai_releases.py
+          )
+          if [[ "$releases" == '[]' ]]; then
+            echo '::error::No qualifying Quay release tags found.'
+            exit 1
+          fi
+          echo "releases=$releases" >> "$GITHUB_OUTPUT"
+          latest_version=$(jq -r 'last' <<< "$releases")
+          echo "latest-version=$latest_version" >> "$GITHUB_OUTPUT"
+
+      - name: Discover RHDS release branches
+        id: rhds-branches
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASES: ${{ steps.releases.outputs.releases }}
+        shell: bash
         run: |
-          branches=$(python3 .github/scripts/list_rhoai_branches.py)
+          set -euo pipefail
+          branches=$(
+            gh api --paginate repos/red-hat-data-services/rhoai-mcp/branches --jq '.[].name' |
+              python3 .github/scripts/list_rhds_release_branches.py --required-releases "$RELEASES"
+          )
+          if [[ "$branches" == '[]' ]]; then
+            echo '::error::No RHDS release branches from 3.6-ea.2 onward found.'
+            exit 1
+          fi
           echo "branches=$branches" >> "$GITHUB_OUTPUT"
-          latest_version=$(jq -r 'last // ""' <<< "$branches")
-          echo "latest-version=$latest_version" >> "$GITHUB_OUTPUT"
 
   check-rhds-branch:
     needs: discover
-    if: needs.discover.outputs.branches != '[]'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        branch: ${{ fromJSON(needs.discover.outputs.branches) }}
+        branch: ${{ fromJSON(needs.discover.outputs.rhds-branches) }}
+        exclude:
+          - branch: rhoai-3.6-ea.2
+          - branch: rhoai-3.6
     name: check-rhds-branch (${{ matrix.branch }})
     steps:
       - name: Check RHDS image in params.env
@@ -58,7 +93,7 @@ jobs:
             -f ref="$BRANCH" \
             -H 'Accept: application/vnd.github.raw+json' > params.env
 
-          expected="registry.redhat.io/rhoai/odh-rhoai-mcp-rhel9:$BRANCH"
+          expected="registry.redhat.io/rhoai/odh-rhoai-mcp-rhel9:v${BRANCH#rhoai-}"
           actual=$(sed -n 's/^RHOAI_MCP_IMAGE=//p' params.env)
           if [[ "$actual" != "$expected" ]]; then
             printf '::error::%s: expected RHOAI_MCP_IMAGE=%s; got %s\n' "$BRANCH" "$expected" "$actual"
@@ -78,14 +113,14 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "$LATEST_VERSION" ]]; then
-            echo '::error::No qualifying RHDS release branches found; cannot determine latest version.'
+            echo '::error::No qualifying Quay release tags found; cannot determine latest version.'
             exit 1
           fi
           gh api --method GET \
             repos/opendatahub-io/model-metadata-collection/contents/input/mcp_servers/redhat/rhoai-mcp-server.yaml \
             -H 'Accept: application/vnd.github.raw+json' > rhoai-mcp-server.yaml
 
-          expected="oci://registry.redhat.io/rhoai/odh-rhoai-mcp-rhel9:$LATEST_VERSION"
+          expected="oci://registry.redhat.io/rhoai/odh-rhoai-mcp-rhel9:v${LATEST_VERSION#rhoai-}"
           if ! EXPECTED_URI="$expected" yq -e '
             (.artifacts | length == 1) and (.artifacts[0].uri == strenv(EXPECTED_URI))
           ' rhoai-mcp-server.yaml > /dev/null; then
@@ -95,25 +130,32 @@ jobs:
           fi
           printf 'artifacts.uri verified: %s\n' "$expected"
 
-  check-requirements-cpu-index:
+  notify-failure:
+    needs: [discover, check-rhds-branch, check-model-metadata-imageref]
+    if: always() && github.ref == 'refs/heads/main' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Check requirements-cpu.txt index URL
+      - name: Send job results to Slack
+        env:
+          MMORTARI_WORKFLOW_SLACK_WEBHOOK: ${{ secrets.MMORTARI_WORKFLOW_SLACK_WEBHOOK }}
+          JOBS: ${{ toJSON(needs) }}
         shell: bash
         run: |
           set -euo pipefail
-          expected=$(sed -n 's/^PYPI_INDEX_URL ?= //p' Makefile)
-          if [[ -z "$expected" ]]; then
-            echo '::error::PYPI_INDEX_URL not found in Makefile'
+          if [[ -z "$MMORTARI_WORKFLOW_SLACK_WEBHOOK" ]]; then
+            echo '::error::MMORTARI_WORKFLOW_SLACK_WEBHOOK is not available'
             exit 1
           fi
-          actual=$(awk '$1 == "--index-url" { print $2 }' requirements-cpu.txt)
-          if [[ "$actual" != "$expected" ]]; then
-            printf '::error::Expected requirements-cpu.txt --index-url %s; got %s\n' "$expected" "$actual"
+          payload=$(jq -n --argjson jobs "$JOBS" \
+            --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --arg run_id "$GITHUB_RUN_ID" '
+            {text: ("check-others failed\n<\($run_url)|Workflow run \($run_id)>\n" +
+              ($jobs | to_entries | map("\(.key): \(.value.result)") | join("\n")))}
+          ')
+          if ! curl --fail --silent --max-time 30 \
+            -H 'Content-Type: application/json' \
+            --data "$payload" "$MMORTARI_WORKFLOW_SLACK_WEBHOOK" > /dev/null 2>&1; then
+            echo '::error::Failed to send Slack notification'
             exit 1
           fi
-          printf 'requirements-cpu.txt --index-url verified: %s\n' "$actual"

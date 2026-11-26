@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           enable-cache: true
 
@@ -52,3 +52,26 @@ jobs:
           python .github/scripts/check_requirements_drift.py
           requirements-cpu.committed.txt
           requirements-cpu.txt
+
+  check-requirements-cpu-index:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Check requirements-cpu.txt index URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(sed -n 's/^PYPI_INDEX_URL ?= //p' Makefile)
+          if [[ -z "$expected" ]]; then
+            echo '::error::PYPI_INDEX_URL not found in Makefile'
+            exit 1
+          fi
+          actual=$(awk '$1 == "--index-url" { print $2 }' requirements-cpu.txt)
+          if [[ "$actual" != "$expected" ]]; then
+            printf '::error::Expected requirements-cpu.txt --index-url %s; got %s\n' "$expected" "$actual"
+            exit 1
+          fi
+          printf 'requirements-cpu.txt --index-url verified: %s\n' "$actual"

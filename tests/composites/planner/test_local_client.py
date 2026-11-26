@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from rhoai_mcp.auth.token_review import TokenReviewValidator
 from rhoai_mcp.composites.planner.client import PlannerAPIError
 from rhoai_mcp.composites.planner.local_client import LocalPlannerClient
 
@@ -60,6 +65,7 @@ def _make_mock_planner() -> MagicMock:
             {
                 "model_id": "meta-llama/Llama-3.1-70B-Instruct",
                 "model_name": "Llama 3.1 70B",
+                "model_uri": "hf://meta-llama/Llama-3.1-70B-Instruct",
                 "gpu_config": {
                     "gpu_type": "NVIDIA-H100",
                     "gpu_count": 2,
@@ -132,7 +138,11 @@ class TestLocalPlannerClientInit:
 
     @patch("rhoai_mcp.composites.planner.local_client.Planner")
     def test_init_with_catalog_sync(self, mock_planner_cls: MagicMock) -> None:
-        """Model Catalog sync is used and bundled benchmarks are skipped."""
+        """Model Catalog sync is used and bundled benchmarks are skipped.
+
+        Outside a cluster there is no service-account token, so the sync
+        is called with token=None (unauthenticated catalog).
+        """
         mock_planner_cls.return_value.sync_model_catalog.return_value = {
             "benchmarks_added": 10,
             "models_added": 5,
@@ -145,8 +155,34 @@ class TestLocalPlannerClientInit:
 
         mock_planner_cls.return_value.sync_model_catalog.assert_called_once_with(
             url="https://catalog.example.com",
+            token=None,
         )
         mock_planner_cls.return_value.load_bundled_benchmarks.assert_not_called()
+
+    @patch("rhoai_mcp.composites.planner.local_client._in_cluster_service_account_token")
+    @patch("rhoai_mcp.composites.planner.local_client.Planner")
+    def test_init_with_catalog_passes_sa_token(
+        self, mock_planner_cls: MagicMock, mock_token: MagicMock
+    ) -> None:
+        """In a cluster, the pod's SA token authenticates the catalog sync.
+
+        RHOAI's model-catalog service is fronted by kube-rbac-proxy, which
+        rejects unauthenticated requests; without the token the sync
+        silently degrades to bundled benchmarks.
+        """
+        mock_token.return_value = "sa-token"
+        mock_planner_cls.return_value.sync_model_catalog.return_value = {
+            "benchmarks_added": 10,
+            "models_added": 5,
+            "errors": [],
+        }
+
+        LocalPlannerClient(model_catalog_url="https://catalog.example.com")
+
+        mock_planner_cls.return_value.sync_model_catalog.assert_called_once_with(
+            url="https://catalog.example.com",
+            token="sa-token",
+        )
 
     @patch("rhoai_mcp.composites.planner.local_client.Planner")
     def test_init_catalog_sync_import_error(self, mock_planner_cls: MagicMock) -> None:
@@ -187,6 +223,73 @@ class TestLocalPlannerClientInit:
 
 class TestLocalPlannerRecommend:
     """Tests for LocalPlannerClient.recommend()."""
+
+    @patch("rhoai_mcp.composites.planner.local_client.Planner")
+    async def test_planner_queries_serialize_and_token_review_completes(
+        self, mock_planner_cls: MagicMock
+    ) -> None:
+        """A cancelled planner call keeps its worker while TokenReview completes."""
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        mock_planner = _make_mock_planner()
+        mock_planner_cls.return_value = mock_planner
+        first_entered = asyncio.Event()
+        release_first = threading.Event()
+        second_entered = threading.Event()
+        ranked = mock_planner.generate_recommendations.return_value
+
+        def generate_recommendations(*_args: object, **_kwargs: object) -> MagicMock:
+            if mock_planner.generate_recommendations.call_count == 1:
+                loop.call_soon_threadsafe(first_entered.set)
+                if not release_first.wait(10):
+                    raise TimeoutError("First planner call was not released")
+            else:
+                second_entered.set()
+            return ranked
+
+        mock_planner.generate_recommendations.side_effect = generate_recommendations
+        user = SimpleNamespace(username="alice", uid=None, groups=[])
+        review = SimpleNamespace(status=SimpleNamespace(authenticated=True, user=user))
+        api_client = MagicMock()
+        api_client.call_api.side_effect = [review, {"groups": []}]
+        validator = TokenReviewValidator(api_client)
+        client = LocalPlannerClient()
+        first = asyncio.create_task(
+            client.recommend(
+                text="ignored",
+                use_case_override="chatbot_conversational",
+                user_count_override=1000,
+                gpu_types_override=["H100"],
+            )
+        )
+        second = None
+        try:
+            await asyncio.wait_for(first_entered.wait(), timeout=5)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            second = asyncio.create_task(
+                client.generate_config(
+                    category="balanced",
+                    use_case="chatbot_conversational",
+                    user_count=1000,
+                    prompt_tokens=512,
+                    output_tokens=256,
+                    expected_qps=10.0,
+                    ttft_target_ms=200,
+                    itl_target_ms=65,
+                    e2e_target_ms=5000,
+                )
+            )
+            identity = await asyncio.wait_for(validator.validate_token("opaque-token"), timeout=5)
+            assert identity.username == "alice"
+            assert not second_entered.is_set()
+        finally:
+            release_first.set()
+            await asyncio.gather(first, return_exceptions=True)
+            if second is not None:
+                await second
+        assert second_entered.is_set()
 
     @patch("rhoai_mcp.composites.planner.local_client.Planner")
     async def test_recommend_full_flow(self, mock_planner_cls: MagicMock) -> None:
@@ -361,6 +464,14 @@ class TestLocalPlannerGenerateConfig:
         assert result.deployment_id == "chatbot-llama-20260322"
         assert result.namespace == "default"
         assert result.model_name == "Llama 3.1 70B"
+        assert result.model_id == "meta-llama/Llama-3.1-70B-Instruct"
+        assert result.model_uri == "hf://meta-llama/Llama-3.1-70B-Instruct"
+        assert result.gpu_config == {
+            "gpu_type": "NVIDIA-H100",
+            "gpu_count": 2,
+            "tensor_parallel": 2,
+            "replicas": 1,
+        }
         assert "inferenceservice" in result.configs
 
     @patch("rhoai_mcp.composites.planner.local_client.Planner")
@@ -562,3 +673,42 @@ class TestLocalPlannerHealthCheck:
 
         assert healthy is True
         assert "local" in msg.lower()
+
+
+class TestInClusterServiceAccountToken:
+    """Tests for the projected SA token reader used by the catalog sync."""
+
+    def test_returns_none_when_token_file_absent(self) -> None:
+        """Outside a cluster (no projected token file) the helper yields None."""
+        with patch("builtins.open", side_effect=FileNotFoundError):
+            from rhoai_mcp.composites.planner.local_client import (
+                _in_cluster_service_account_token,
+            )
+
+            assert _in_cluster_service_account_token() is None
+
+    def test_returns_file_content(self) -> None:
+        """The projected token content is returned stripped."""
+        from unittest.mock import mock_open
+
+        from rhoai_mcp.composites.planner.local_client import (
+            _in_cluster_service_account_token,
+        )
+
+        with patch(
+            "builtins.open", mock_open(read_data="  tok  \n")
+        ):
+            assert _in_cluster_service_account_token() == "tok"
+
+    def test_returns_none_for_empty_token(self) -> None:
+        """An empty token file yields None, not an empty string."""
+        from unittest.mock import mock_open
+
+        from rhoai_mcp.composites.planner.local_client import (
+            _in_cluster_service_account_token,
+        )
+
+        with patch(
+            "builtins.open", mock_open(read_data="  \n")
+        ):
+            assert _in_cluster_service_account_token() is None

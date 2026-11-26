@@ -8,7 +8,7 @@
 # Stage 1: Builder - Install dependencies with uv
 # =============================================================================
 
-ARG BASE_IMAGE=quay.io/opendatahub/odh-midstream-python-base-3-12:1.20260625.1@sha256:e50b08950097ed95f137e6899696911422166ef539153bb08c15ee36b05a54f0
+ARG BASE_IMAGE=quay.io/opendatahub/odh-midstream-python-base-3-12:1.20261111.1@sha256:3e2b0ae27f82c5760b1c9d7695fdc7ab339d9934047525d817915adc03261c26
 
 FROM --platform=${BUILDPLATFORM} ${BASE_IMAGE} AS builder
 
@@ -61,7 +61,7 @@ EXPOSE 8000
 # Health check for HTTP transports
 # Note: Only works with SSE/streamable-http, not stdio
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5)" || exit 0
+    CMD python -c "import httpx2; httpx2.get('http://localhost:8000/health', timeout=5)" || exit 0
 
 # Default entrypoint runs the MCP server
 ENTRYPOINT ["rhoai-mcp"]

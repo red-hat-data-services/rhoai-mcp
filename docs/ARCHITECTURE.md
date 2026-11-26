@@ -111,11 +111,45 @@ For **JWT mode** with audience-bound tokens, user-token pass-through is a spec v
 
 ### Per-Message Token Extraction
 
-For HTTP transports (SSE, streamable-http), the server prefers the token from the per-message `request_ctx` (the MCP library's per-handler ContextVar carrying the POST's Starlette Request) over the session-level `UserContext.token`. This handles token refresh mid-session: if the client obtains a new token and sends it on subsequent POSTs, the new token is used automatically without tearing down the connection.
+For HTTP transports (streamable-http — the primary transport — and SSE, which is legacy), the server prefers the token from the per-message request headers (`ctx.request_context.request.headers` on the mcp 2.x `ServerRequestContext` — the runner maps the POST's Starlette Request onto it) over the session-level `UserContext.token`. This handles token refresh mid-session: if the client obtains a new token and sends it on subsequent POSTs, the new token is used automatically without tearing down the connection.
 
 ### RBAC Filtering
 
 Regardless of the auth strategy, the `RBACChecker` uses the SA's own credentials to issue `SubjectAccessReview` calls. This determines which MCP tools the user is allowed to see and call. The SA needs `create subjectaccessreviews` permission for this — no impersonation required.
+
+### Session and Process State
+
+The server keeps no state keyed by MCP session. The full inventory (RHAI-14634 audit):
+
+| State | Scope | Lifetime | Notes |
+|---|---|---|---|
+| `UserContext` (contextvar) | per request | request | Set by `OIDCAuthMiddleware`, reset after each request |
+| Per-message request data | per message | message | `ctx.request_context.request` — the POST's headers, including `Authorization` |
+| K8s clients | per call (user-scoped) or per process (SA-backed), by kind | call (user-scoped) / process (SA-backed) | `get_k8s(ctx)` builds user-scoped clients per call (user-token strategy) or impersonated clients; `get_shared_k8s()` is the SA-backed shared client |
+| `PortForwardManager` | per process | app shutdown (HTTP) / process end (stdio) | Ref-counted singleton; port-forwards to in-cluster services when running outside the cluster. A session ending never closes a forward another session shares (`tests/test_server_lifespan.py`) |
+| Planner local client | per process | process | Built once at the first planner tool call (including the model-catalog sync); not mutated after initialization |
+| Registry/inference discovery cache | per process | process | Caches cluster-level discovery (API type, URL) — never user data |
+| MCP session manager | per process (SDK-owned) | process (in-memory) | Holds sessions in stateful Streamable HTTP; `stateless_http=True` (the MCP SDK's flag, exposed as `RHOAI_MCP_STATELESS_HTTP`) runs without server-side sessions |
+
+**Session lifespans carry no teardown responsibility.** The per-session lifespan body only logs (plus
+port-forward cleanup in stdio mode, where one session spans the whole process). For HTTP
+transports, cleanup is attached to the ASGI app lifespan (uvicorn shutdown), not to client
+sessions — a client disconnecting never tears down shared process state.
+
+**Stateless-protocol implications:** in stateless operation every request carries its own
+credentials and no server-side affinity is required — any replica behind plain round-robin
+can answer any request (no state is keyed by MCP session, per the story 4.1 audit; end-to-end
+round-robin validation through the gateway is tracked in
+[RHAI-14636](https://redhat.atlassian.net/browse/RHAI-14636), story 4.3). The default
+Streamable HTTP mode is stateful: sessions live in memory, so a client whose requests reach
+a different replica fails. Round-robin balancing therefore requires sticky routing in the
+default mode; setting `RHOAI_MCP_STATELESS_HTTP=true`
+([RHAI-59232](https://redhat.atlassian.net/browse/RHAI-59232)) enables the SDK's stateless
+mode, which needs no server-side sessions. One requirement applies to multi-replica
+deployments either way: workflow tokens are signed with `RHOAI_MCP_WORKFLOW_HMAC_SECRET`,
+which defaults to a per-process random value — every replica must share the same secret, or
+a token issued by one replica fails verification on another regardless of session mode (see
+the README's Workflow Tokens section).
 
 ## Composite Workflow Tools
 
@@ -154,7 +188,7 @@ except Exception as e:
 **Purpose:** Complete cluster exploration with all projects and resource summaries in one call.
 
 **Implementation notes:**
-- Uses `TrainingClient.get_cluster_resources()` for GPU info
+- Uses `ClusterClient.get_cluster_resources()` for GPU info
 - Iterates projects and extracts `resource_summary` from Project model
 - Health checks are simple heuristics (e.g., "all workbenches stopped")
 
@@ -414,7 +448,7 @@ Wraps MCP tool functions to handle token flow automatically:
 - **`requires`**: Verifies the incoming `workflow_token` kwarg matches the expected step. On success, replaces the raw token string with the verified data dict. On failure, returns an error dict without calling the tool function.
 - **`produces`**: Signs the tool's return dict (excluding any existing `workflow_token` key) and adds a `workflow_token` key. Skipped when the return dict contains an `"error"` key.
 
-The decorator preserves `__signature__` so FastMCP generates correct JSON schemas.
+The decorator preserves `__signature__` so MCPServer generates correct JSON schemas.
 
 ### Example Chain
 
@@ -519,17 +553,17 @@ To add a new domain:
            )
 
        @hookimpl
-       def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+       def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
            from rhoai_mcp.domains.newdomain.tools import register_tools
            register_tools(mcp, server)
 
        @hookimpl
-       def rhoai_register_resources(self, mcp: FastMCP, server: RHOAIServer) -> None:
+       def rhoai_register_resources(self, mcp: MCPServer, server: RHOAIServer) -> None:
            from rhoai_mcp.domains.newdomain.resources import register_resources
            register_resources(mcp, server)
 
        @hookimpl
-       def rhoai_register_prompts(self, mcp: FastMCP, server: RHOAIServer) -> None:
+       def rhoai_register_prompts(self, mcp: MCPServer, server: RHOAIServer) -> None:
            from rhoai_mcp.domains.newdomain.prompts import register_prompts
            register_prompts(mcp, server)
    ```

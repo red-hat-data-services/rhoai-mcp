@@ -209,6 +209,15 @@ __marimo__/
 .mcp.json
 
 # Eval reports, results, and env
+.mlflow
 evals/reports/
-evals/results/
+evals/results/*
+!evals/results/README.md
 .env.eval
+
+.deepeval
+.deepeval-cache.json
+.deepeval_telemetry.txt
+temp_test_run_data.json
+.DS_Store
+._.DS_Store
