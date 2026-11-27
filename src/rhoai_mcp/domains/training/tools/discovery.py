@@ -2,7 +2,7 @@
 
 from typing import TYPE_CHECKING, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 
 from rhoai_mcp.domains.training.client import TrainingClient
 from rhoai_mcp.utils.response import (
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from rhoai_mcp.server import RHOAIServer
 
 
-def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
+def register_tools(mcp: MCPServer, server: "RHOAIServer") -> None:
     """Register training discovery tools with the MCP server."""
 
     @mcp.tool()
@@ -25,6 +25,7 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
         limit: int | None = None,
         offset: int = 0,
         verbosity: str = "standard",
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """List training jobs in a namespace with pagination.
 
@@ -41,7 +42,7 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
         Returns:
             Paginated list of training jobs with metadata.
         """
-        client = TrainingClient(server.k8s)
+        client = TrainingClient(server.get_k8s(ctx))
         jobs = client.list_training_jobs(namespace)
 
         # Apply config limits
@@ -67,6 +68,7 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
         namespace: str,
         name: str,
         verbosity: str = "full",
+        ctx: Context | None = None,
     ) -> dict[str, Any]:
         """Get detailed information about a specific training job.
 
@@ -82,61 +84,16 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
         Returns:
             Training job information at the requested verbosity level.
         """
-        client = TrainingClient(server.k8s)
+        client = TrainingClient(server.get_k8s(ctx))
         job = client.get_training_job(namespace, name)
 
         v = Verbosity.from_str(verbosity)
         return ResponseBuilder.training_job_detail(job, v)
 
     @mcp.tool()
-    def get_cluster_resources() -> dict[str, Any]:
-        """Get cluster-wide compute resources available for training.
-
-        Returns information about CPU, memory, and GPU resources across
-        all nodes in the cluster. Useful for planning training jobs and
-        understanding cluster capacity.
-
-        Returns:
-            Cluster resource summary including CPU, memory, and GPU info.
-        """
-        client = TrainingClient(server.k8s)
-        resources = client.get_cluster_resources()
-
-        result: dict[str, Any] = {
-            "cpu_total": resources.cpu_total,
-            "cpu_allocatable": resources.cpu_allocatable,
-            "memory_total_gb": round(resources.memory_total_gb, 1),
-            "memory_allocatable_gb": round(resources.memory_allocatable_gb, 1),
-            "node_count": resources.node_count,
-            "has_gpus": resources.has_gpus,
-        }
-
-        if resources.gpu_info:
-            result["gpu_info"] = {
-                "type": resources.gpu_info.type,
-                "product": resources.gpu_info.product,
-                "products": resources.gpu_info.products,
-                "total": resources.gpu_info.total,
-                "available": resources.gpu_info.available,
-                "nodes_with_gpu": resources.gpu_info.nodes_with_gpu,
-            }
-
-        # Include per-node details
-        result["nodes"] = [
-            {
-                "name": node.name,
-                "cpu": node.cpu_allocatable,
-                "memory_gb": round(node.memory_allocatable_gb, 1),
-                "gpus": node.gpu_count,
-                "gpu_product": node.gpu_product,
-            }
-            for node in resources.nodes
-        ]
-
-        return result
-
-    @mcp.tool()
-    def list_training_runtimes(namespace: str | None = None) -> dict[str, Any]:
+    def list_training_runtimes(
+        namespace: str | None = None, ctx: Context | None = None
+    ) -> dict[str, Any]:
         """List available training runtimes.
 
         Training runtimes define the container images, frameworks, and
@@ -149,7 +106,7 @@ def register_tools(mcp: FastMCP, server: "RHOAIServer") -> None:
         Returns:
             List of available training runtimes.
         """
-        client = TrainingClient(server.k8s)
+        client = TrainingClient(server.get_k8s(ctx))
 
         # Always get cluster-scoped runtimes
         runtimes = client.list_cluster_training_runtimes()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from typing import Any
 
 from planner import (
@@ -26,6 +28,21 @@ from rhoai_mcp.composites.planner.models import (
 
 logger = logging.getLogger(__name__)
 
+#: Projected service-account token location in Kubernetes pods (read fresh
+#: at sync time so token rotation is picked up; the token authorizes the
+#: server's SA against kube-rbac-proxy-fronted catalogs).
+_SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+
+def _in_cluster_service_account_token() -> str | None:
+    """The pod's service-account token, or None outside a cluster."""
+    try:
+        with open(_SA_TOKEN_PATH) as f:
+            token = f.read().strip()
+    except OSError:
+        return None
+    return token or None
+
 
 class LocalPlannerClient:
     """Embedded Planner client using in-process library calls.
@@ -41,6 +58,8 @@ class LocalPlannerClient:
         model_catalog_url: str | None = None,
     ) -> None:
         self._planner = Planner()
+        # Serialize SQLite queries and keep the default executor available for auth.
+        self._recommendation_executor = ThreadPoolExecutor(max_workers=1)
 
         # Pre-seed the gpu_normalizer singleton with the Planner's catalog
         # to avoid a redundant ModelCatalog() construction on first
@@ -51,7 +70,10 @@ class LocalPlannerClient:
 
         if model_catalog_url:
             try:
-                result = self._planner.sync_model_catalog(url=model_catalog_url)
+                result = self._planner.sync_model_catalog(
+                    url=model_catalog_url,
+                    token=_in_cluster_service_account_token(),
+                )
                 logger.info(
                     "Model Catalog sync: %d benchmarks added, %d models added",
                     result.get("benchmarks_added", 0),
@@ -263,7 +285,9 @@ class LocalPlannerClient:
             )
 
         try:
-            return await asyncio.to_thread(_run)
+            return await asyncio.get_running_loop().run_in_executor(
+                self._recommendation_executor, copy_context().run, _run
+            )
         except PlannerAPIError:
             raise
         except ValueError as e:
@@ -387,7 +411,9 @@ class LocalPlannerClient:
             )
 
         try:
-            return await asyncio.to_thread(_run)
+            return await asyncio.get_running_loop().run_in_executor(
+                self._recommendation_executor, copy_context().run, _run
+            )
         except PlannerAPIError:
             raise
         except ValueError as e:

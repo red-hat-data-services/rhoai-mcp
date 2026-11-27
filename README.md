@@ -26,7 +26,7 @@ An MCP (Model Context Protocol) server that enables AI agents to interact with R
 | Component | Technology | Purpose |
 |-----------|------------|---------|
 | **Runtime** | Python 3.11+ | Core language |
-| **MCP Framework** | FastMCP 1.0+ | Model Context Protocol server |
+| **MCP Framework** | MCPServer 2.0+ | Model Context Protocol server |
 | **Kubernetes Client** | kubernetes-python 28.1+ | Cluster API interactions |
 | **Data Validation** | Pydantic 2.0+ | Type-safe models and settings |
 | **HTTP Client** | httpx 0.27+ | Async HTTP requests |
@@ -68,8 +68,8 @@ rhoai-mcp
 # Build the image
 make build
 
-# Run with HTTP transport
-make run-http
+# Run with HTTP transport (streamable-http, primary)
+make run-streamable
 
 # Run with STDIO transport (interactive)
 make run-stdio
@@ -84,12 +84,12 @@ Or run directly without Make:
 # Build
 podman build -f Containerfile -t rhoai-mcp:latest .
 
-# Run with HTTP transport
+# Run with HTTP transport (streamable-http, primary)
 podman run -p 8000:8000 \
   -v ~/.kube/config:/opt/app-root/src/kubeconfig/config:ro \
   -e RHOAI_MCP_AUTH_MODE=kubeconfig \
   -e RHOAI_MCP_KUBECONFIG_PATH=/opt/app-root/src/kubeconfig/config \
-  rhoai-mcp:latest --transport sse
+  rhoai-mcp:latest --transport streamable-http
 
 # Run with STDIO transport
 podman run -it \
@@ -104,7 +104,7 @@ Available Make targets:
 | Target | Description |
 |--------|-------------|
 | `make build` | Build the container image |
-| `make run-http` | Run with SSE transport on port 8000 |
+| `make run-http` | Run with SSE transport (legacy) on port 8000 |
 | `make run-streamable` | Run with streamable-http transport |
 | `make run-stdio` | Run with STDIO transport (interactive) |
 | `make run-dev` | Run with debug logging |
@@ -131,7 +131,7 @@ deploy/kustomize/
 ├── base/                    # Shared resources (all environments)
 │   ├── clusterrole.yaml     # RBAC for RHOAI resources
 │   ├── deployment.yaml      # Hardened pod spec (non-root, read-only rootfs, probes)
-│   ├── configmap.yaml       # Default config (SSE transport, INFO logging)
+│   ├── configmap.yaml       # Default config (streamable-http transport, INFO logging)
 │   └── ...
 └── overlays/
     ├── kind/                # NodePort, DEBUG logging, imagePullPolicy: Never
@@ -170,6 +170,17 @@ When [required](deploy/kustomize/overlays/openshift-oidc/README.md), apply the N
 ```bash
 oc apply -f deploy/kustomize/overlays/openshift/networkpolicy.yaml
 ```
+
+## Testing Layers
+
+Behavioral testing is split across two layers with different scopes:
+
+| Layer | What it covers | Where |
+|---|---|---|
+| **In-repo smoke lane** (`Smoke E2E (KinD)` workflow) | Golden path on every PR: server boot and health, RBAC list-filtering and call-denial for two personas, and a token-rotation case — the server deployed into a KinD cluster in token-review mode, driven by a raw JSON-RPC client ([`ci/smoke/smoke_test.py`](ci/smoke/smoke_test.py)). SDK-agnostic on purpose: the client uses no MCP SDK, so the lane is inert to SDK upgrades. Runs in ~5–15 minutes. | [`.github/workflows/smoke-kind.yml`](.github/workflows/smoke-kind.yml) |
+| **Full E2E suite** (opendatahub-tests) | Post-deployment breadth: the MCP Gateway path, model-serving tool calls against real components, JWT/OIDC mode, and the full RBAC matrix — against productized, digest-pinned images on a real cluster. | [`opendatahub-tests`](https://github.com/opendatahub-io/opendatahub-tests) `tests/rhoai_mcp/` |
+
+The smoke lane is deliberately *not* a duplicate of the full suite: no gateway, no model-serving tool calls, no JWT/OIDC mode. It exists so that `main` (and long-lived branches) get behavioral signal at merge time without waiting on a deployment.
 
 ## Configuration
 
@@ -211,6 +222,15 @@ export RHOAI_MCP_TRANSPORT=stdio
 export RHOAI_MCP_TRANSPORT=streamable-http
 export RHOAI_MCP_HOST=127.0.0.1
 export RHOAI_MCP_PORT=8000
+
+# Stateless HTTP (streamable-http only): run without server-side sessions,
+# so any replica behind a round-robin load balancer can answer any request.
+# The default (stateful) keeps sessions in memory and requires sticky routing.
+# Multi-replica note: workflow tokens are signed with RHOAI_MCP_WORKFLOW_HMAC_SECRET,
+# which defaults to a per-process random value — set the same secret on every
+# replica, or a token issued by one replica fails verification on another.
+# See "Workflow Tokens" below.
+export RHOAI_MCP_STATELESS_HTTP=true
 ```
 
 ### Safety Settings
@@ -674,6 +694,18 @@ model_id: meta-llama/Llama-3.1-8B-Instruct
 | `list_serving_runtimes` | List available runtimes |
 | `get_model_endpoint` | Get inference endpoint URL |
 
+### AutoML (3 tools)
+
+| Tool | Description |
+|------|-------------|
+| `list_automl_deployments` | List explicitly exposed AutoGluon deployments in a project |
+| `get_automl_deployment` | Get AutoML deployment status, input schema, and example record |
+| `predict_automl_deployment` | Validate JSON records, call KServe v2, and return predictions |
+
+Classification deployments return a class and probabilities when their AutoGluon
+ServingRuntime enables `PREDICT_PROBA=true`; regression deployments return numeric values.
+See [AutoML MCP deployments](docs/automl-mcp.md) for the exposure contract and client examples.
+
 ### Data Connections (4 tools)
 
 | Tool | Description |
@@ -834,9 +866,9 @@ uv run mypy src/rhoai_mcp
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                MCP Transport Layer (stdio/SSE/HTTP)             │
+│           MCP Transport Layer (stdio / streamable-http / SSE·legacy)      │
 ├─────────────────────────────────────────────────────────────────┤
-│  FastMCP Server (server.py)                                     │
+│  MCPServer (server.py)                                            │
 │  - Tool registration     - Resource registration                │
 │  - Prompt registration   - Lifecycle management                 │
 ├───────────────────┬─────────────────────┬───────────────────────┤

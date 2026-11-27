@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_JUDGE_MODEL = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
 
-class LLMProvider(str, Enum):
+
+class LLMProvider(StrEnum):
     """LLM provider for the judge LLM."""
 
     OPENAI = "openai"
+    ENMAAS = "enmaas"
     VLLM = "vllm"
     AZURE = "azure"
     ANTHROPIC = "anthropic"
@@ -20,7 +23,7 @@ class LLMProvider(str, Enum):
     GOOGLE_VERTEX = "google-vertex"
 
 
-class ClusterMode(str, Enum):
+class ClusterMode(StrEnum):
     """Whether to use mock or live K8s cluster."""
 
     MOCK = "mock"
@@ -113,3 +116,12 @@ class EvalConfig(BaseSettings):
         le=1.0,
         description="Minimum score for MCPTaskCompletionMetric",
     )
+
+    @property
+    def judge_base_url(self) -> str | None:
+        """Resolved endpoint, including the EnMaaS default, without credentials."""
+        if self.eval_provider == LLMProvider.ENMAAS and not self.eval_model_base_url:
+            from evals.agent.models import ENMAAS_BASE_URL
+
+            return ENMAAS_BASE_URL
+        return self.eval_model_base_url

@@ -10,6 +10,7 @@ import os
 from typing import TYPE_CHECKING
 
 from rhoai_mcp.domains.permissions import (
+    AUTOML_PERMISSIONS,
     CONNECTIONS_PERMISSIONS,
     INFERENCE_PERMISSIONS,
     NOTEBOOKS_PERMISSIONS,
@@ -22,7 +23,7 @@ from rhoai_mcp.hooks import hookimpl
 from rhoai_mcp.plugin import BasePlugin, PluginMetadata
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from rhoai_mcp.clients.base import CRDDefinition
     from rhoai_mcp.server import RHOAIServer
@@ -43,13 +44,13 @@ class ProjectsPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.projects.tools import register_tools
 
         register_tools(mcp, server)
 
     @hookimpl
-    def rhoai_register_resources(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_resources(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.projects.resources import register_resources
 
         register_resources(mcp, server)
@@ -78,7 +79,7 @@ class NotebooksPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.notebooks.tools import register_tools
 
         register_tools(mcp, server)
@@ -109,7 +110,7 @@ class InferencePlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.inference.tools import register_tools
 
         register_tools(mcp, server)
@@ -129,6 +130,42 @@ class InferencePlugin(BasePlugin):
         ]
 
 
+class AutoMLPlugin(BasePlugin):
+    """Plugin for exposed AutoGluon classification and regression deployments."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            PluginMetadata(
+                name="automl",
+                version="0.1.0",
+                description="Exposed AutoGluon deployment discovery and prediction",
+                maintainer="rhoai-mcp@redhat.com",
+                requires_crds=["InferenceService"],
+            )
+        )
+
+    @hookimpl
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
+        from rhoai_mcp.domains.automl.tools import register_tools
+
+        register_tools(mcp, server)
+
+    @hookimpl
+    def rhoai_get_tool_permissions(self) -> dict[str, list[dict[str, str]]]:
+        return AUTOML_PERMISSIONS
+
+    @hookimpl
+    def rhoai_health_check(self, server: RHOAIServer) -> tuple[bool, str]:
+        """Verify the shared KServe InferenceService CRD is available."""
+        from rhoai_mcp.domains.inference.crds import InferenceCRDs
+
+        try:
+            server.get_shared_k8s().get_resource(InferenceCRDs.INFERENCE_SERVICE)
+        except Exception:
+            return False, "KServe InferenceService CRD is unavailable"
+        return True, "KServe InferenceService CRD is available"
+
+
 class PipelinesPlugin(BasePlugin):
     """Plugin for Data Science Pipelines (DSPA) management."""
 
@@ -144,7 +181,7 @@ class PipelinesPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.pipelines.tools import register_tools
 
         register_tools(mcp, server)
@@ -175,7 +212,7 @@ class ConnectionsPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.connections.tools import register_tools
 
         register_tools(mcp, server)
@@ -204,7 +241,7 @@ class StoragePlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.storage.tools import register_tools
 
         register_tools(mcp, server)
@@ -233,7 +270,7 @@ class TrainingPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.training.tools import register_tools
 
         register_tools(mcp, server)
@@ -269,7 +306,7 @@ class PromptsPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_prompts(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_prompts(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.prompts.prompts import register_prompts
 
         register_prompts(mcp, server)
@@ -302,7 +339,7 @@ class ModelRegistryPlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains.model_registry.tools import register_tools
 
         register_tools(mcp, server)
@@ -322,7 +359,7 @@ class ModelRegistryPlugin(BasePlugin):
         if server.config.model_registry_discovery_mode == ModelRegistryDiscoveryMode.AUTO:
             from rhoai_mcp.domains.model_registry.discovery import ModelRegistryDiscovery
 
-            discovery = ModelRegistryDiscovery(server.k8s)
+            discovery = ModelRegistryDiscovery(server.get_shared_k8s())
             result = discovery.discover(fallback_url=server.config.model_registry_url)
 
             if result:
@@ -381,7 +418,7 @@ class ExamplePlugin(BasePlugin):
         )
 
     @hookimpl
-    def rhoai_register_tools(self, mcp: FastMCP, server: RHOAIServer) -> None:
+    def rhoai_register_tools(self, mcp: MCPServer, server: RHOAIServer) -> None:
         from rhoai_mcp.domains._example.tools import register_tools
 
         register_tools(mcp, server)
@@ -404,6 +441,7 @@ def get_core_plugins() -> list[BasePlugin]:
         ProjectsPlugin(),
         NotebooksPlugin(),
         InferencePlugin(),
+        AutoMLPlugin(),
         PipelinesPlugin(),
         ConnectionsPlugin(),
         StoragePlugin(),

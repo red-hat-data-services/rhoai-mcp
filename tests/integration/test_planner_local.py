@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -89,7 +91,7 @@ async def deploy_config_result(local_client: LocalPlannerClient) -> DeploymentCo
 
 
 def _register_local_tools() -> dict[str, Any]:
-    """Register MCP tools with a mock FastMCP backed by a real local planner."""
+    """Register MCP tools with a mock MCPServer backed by a real local planner."""
     mock_mcp = MagicMock()
     registered: dict[str, Any] = {}
 
@@ -189,6 +191,26 @@ async def test_expected_rps_preserves_small_demand(
 
 
 # == High-level client: recommend() ===========================================
+
+
+def test_concurrent_local_recommendations_do_not_crash() -> None:
+    """Exercise one real planner under parallel recommendations, safely isolated.
+
+    The shared in-memory benchmark connection has crashed in SQLite when these
+    calls overlap. A subprocess makes a native crash a test failure rather than
+    terminating pytest. Repetition increases the chance of exposing the race.
+    """
+    result = subprocess.run(
+        [sys.executable, "-m", "tests.integration._planner_concurrency"],
+        env={**os.environ, "PLANNER_DETECT_CLUSTER_GPUS": "false", "PYTHONFAULTHANDLER": "1"},
+        capture_output=True,
+        text=True,
+        timeout=90,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"Concurrent planner subprocess exited with {result.returncode}:\n{result.stderr[-4000:]}"
+    )
 
 
 def test_recommend_returns_result(recommend_result: RecommendationResult) -> None:
